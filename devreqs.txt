@@ -1,0 +1,8 @@
+# implicit index-url value
+# --index-url https://pypi.python.org/simple/
+
+# satisfy local dev dependencies first
+# -e ../taskfolder
+
+# install current package in editable mode
+-e .
