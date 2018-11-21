@@ -2,8 +2,8 @@
 import os
 from setuptools import setup
 
-version = "2.0.0"
-project = 'lx_tm'
+version = "1.0.0"
+project = 'bottle_yaap'
 author = "Pieter Vermeylen"
 author_email = "pieter@somnolentia.net"
 license = "MIT"
@@ -41,7 +41,4 @@ setup(
 
     py_modules=[project],
     install_requires=get_reqs(),
-    entry_points={
-        'console_scripts': ['tm=lx_tm:cli'],
-    }
 )
