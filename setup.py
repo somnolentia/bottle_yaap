@@ -2,7 +2,7 @@
 import os
 from setuptools import setup
 
-version = "1.0.0"
+version = "1.0"
 project = 'bottle_yaap'
 author = "Pieter Vermeylen"
 author_email = "pieter@somnolentia.net"
@@ -25,13 +25,13 @@ setup(
     name=project,
     version=version,
     license=license,
-    description="luminix translation memory module",
+    description="Yet Another Authorization Plugin (for Bottle)",
     long_description=_read('README.rst'),
     platforms=('Any'),
     keywords="",
     author=author,
     author_email=author_email,
-    url=f'https://www.luminix.fi/code/{project}',
+    url=f'https://www.somnolentia.net/code/{project}',
     classifiers=[
         'Intended Audience :: Developers',
         'Programming Language :: Python :: 3',
@@ -41,4 +41,7 @@ setup(
 
     py_modules=[project],
     install_requires=get_reqs(),
+    entry_points={
+        'console_scripts': ['yaap=bottle_yaap:cli'],
+    }
 )

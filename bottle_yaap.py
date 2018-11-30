@@ -5,317 +5,542 @@ Yet Another Auth Plugin (for Bottle).
 
 Users and matching sessions stored in Sqlite DB.
 """
-import bottle
-import urllib
-from datetime import datetime, timedelta
+import sqlite3
+from contextlib import contextmanager
+from collections import namedtuple
+from urllib.parse import quote_plus
+from secrets import token_urlsafe
 from passlib.context import CryptContext
-from uuid import uuid4
-from base64 import b64encode
-from bottle import request, response, abort, view, redirect
-from peewee import (Model, CharField, ForeignKeyField, DateTimeField,
-                    SqliteDatabase, DoesNotExist, IntegrityError, 
-                    ManyToManyField)
-from marshmallow import Schema, fields, validate
-# crypt
+from passlib.hash import argon2
+import bottle
+from bottle import request, response, abort, view, redirect, template
+
+
+# TODO: implement AuthPlugin.create AuthPlugin.update and AuthPlugin.delete
+# TODO: logging
+# TODO: documentation
+
+# passlib crypt config
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
-# session configuration
-COOKIE_KEY = "lu_k"
-COOKIE_SECRET = "alle apen apen apen na"
-COOKIE_EXPIRATION = 3600
-LOGIN_URL = "{}/login/?from_url={}"
-LOGOUT_URL = "{}/logout/?from_url={}"
+# user data container
+User = namedtuple('User', ['username', 'email', 'groups'])
 
 
-def uuid():
-    string = b64encode(uuid4().bytes).decode()
-    return string.replace('/', '_').replace('+', '-').replace('=', '')
+# DATABASE
+@contextmanager
+def atomic(dbfile):
+    connection = sqlite3.connect(dbfile)
+    connection.execute('PRAGMA foreign_keys = ON;')
+    cursor = connection.execute('BEGIN TRANSACTION')
+    yield cursor
+    try:
+        connection.commit()
+    except connection.Error:
+        connection.rollback()
+    finally:
+        connection.close()
+
+
+def create_tables(cursor):
+    """ create user, usergroup and group tables """
+    cursor.execute("""
+        CREATE TABLE users(
+            userid      INTEGER PRIMARY KEY,
+            username    TEXT NOT NULL,
+            password    TEXT NOT NULL,
+            email       TEXT NOT NULL
+        );
+    """)
+    cursor.execute("""
+        CREATE TABLE groups(
+            groupid     INTEGER PRIMARY KEY,
+            name        TEXT NOT NULL
+        );
+    """)
+    cursor.execute("""
+        CREATE TABLE usergroups(
+            userid     INTEGER,
+            groupid    INTEGER,
+            PRIMARY KEY (userid, groupid)
+            FOREIGN KEY (userid) REFERENCES users (userid)
+            ON DELETE CASCADE ON UPDATE NO ACTION
+            FOREIGN KEY (groupid) REFERENCES groups (groupid)
+            ON DELETE CASCADE ON UPDATE NO ACTION
+        );
+    """)
+    cursor.execute("""
+        CREATE TABLE settings(
+            key     TEXT PRIMARY KEY,
+            value
+        );
+    """)
+    cursor.execute("""
+        CREATE TABLE sessions(
+            userid   INTEGER PRIMARY KEY,
+            key      TEXT NOT NULL,
+            started  TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (userid) REFERENCES users (userid)
+            ON DELETE CASCADE ON UPDATE NO ACTION
+        );
+    """)
+    cursor.execute("CREATE UNIQUE INDEX idx_groups_name ON groups (name)")
+    cursor.execute(
+        "CREATE UNIQUE INDEX idx_users_username ON users (username)"
+    )
+
+
+def get_conf(cursor):
+    conf = {
+        'allow_registration': None,
+        'cookie_key': 'bottle_yaap',
+        'cookie_secret': 'sneakyyaapi'
+    }
+    for key, value in cursor.execute("SELECT key, value FROM settings"):
+        conf[key] = value
+    return conf
+
+
+def get_userid(cursor, username):
+    try:
+        return next(cursor.execute(
+            "SELECT userid FROM users WHERE username = ?", (username,),
+        ))[0]
+    except TypeError: 
+        raise LookupError(f"No user with username {username!r}")
+
+
+def get_email(cursor, username):
+    try:
+        return next(cursor.execute(
+            "SELECT email FROM users WHERE username = ?",
+            (username,))
+        )[0]
+    except StopIteration:
+        raise LookupError(f"No user with username {username!r}")
+
+
+def get_usergroups(cursor, username):
+    groups = cursor.execute("""
+        SELECT name
+        FROM groups
+        INNER JOIN usergroups ON usergroups.groupid = groups.groupid
+        INNER JOIN users ON users.userid = usergroups.userid
+        WHERE users.username = ?
+        """, (username,)
+    )
+    return {g[0] for g in groups}
+
+
+def get_user(cursor, username):
+    return User(username, get_email(cursor, username),
+                get_usergroups(cursor, username))
+
+
+def create_user(cursor, username, password, email, groups=None):
+    """ create a user, return user_id """
+    groups = groups or []
+    cursor.execute(
+        "INSERT INTO users ('username', 'password', 'email') VALUES(?, ?, ?)",
+        (username, argon2.hash(password), email)
+    )
+    for group in groups:
+        create_usergroup(cursor, username, group)
+
+
+def create_usergroup(cursor, username, group):
+    userid = get_userid(cursor, username)
+
+    try:
+        groupid = next(cursor.execute(
+            "SELECT groupid FROM groups WHERE name = ?", (group,)))[0]
+    except StopIteration:
+        cursor.execute(
+            "INSERT INTO groups ('name') VALUES (?)", (group,)
+        )
+        groupid = cursor.lastrowid
+
+    # finally create usergroup
+    cursor.execute(
+        "INSERT INTO usergroups ('userid', 'groupid') VALUES(?, ?)",
+        (userid, groupid)
+    )
+
+
+def remove_user(cursor, username):
+    """ remove the user and all groups without a user """
+    cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+    cursor.execute("""
+        DELETE
+        FROM groups
+        WHERE NOT EXISTS(
+            SELECT
+                NULL
+            FROM
+                usergroups ug
+            WHERE
+                ug.groupid = groupid
+            )
+        """)
+
+
+def remove_usergroup(cursor, username, group):
+    cursor.execute("""
+        DELETE
+        FROM usergroups
+        WHERE
+            userid = (SELECT userid FROM users WHERE username = ?)
+            AND
+            groupid = (SELECT groupid FROM groups WHERE name = ?)
+    """, (username, group))
+
+
+def update_user(cursor, username, attr, value):
+    """
+    Update user username, email, password or groups.
+
+    Note: value has to be of correct type, i.e. a set for groups or a string 
+    for username/password.
+    """
+    if attr not in ['username', 'password', 'email', 'groups']:
+        raise ValueError(f"{attr!r} is not a valid user attribute")
+    if attr == 'password':
+        value = argon2.hash(value)
+    elif attr == 'groups':
+        current = get_usergroups(cursor, username)
+        for group in current.difference(value):
+            remove_usergroup(cursor, username, group)
+        for group in value.difference(current):
+            create_usergroup(cursor, username, group)
+        return 
+
+    cursor.execute(f"""
+        UPDATE users
+        SET
+            {attr} = ?
+        WHERE
+            username = ?
+    """, (value, username))
+
+
+def configure(cursor, key, value):
+    """ set YAAP configuration option """
+    allowed_keys = {'registration', 'cookie_key', 'cookie_secret'}
+    if key not in allowed_keys:
+        raise ValueError(f"{key!r} is not a valid settings key")
+
+    cursor.execute(
+        "REPLACE INTO settings ('key', 'value') VALUES (?, ?)",
+        (key, value)
+    )
+
+
+def logout_user(cursor, username):
+    cursor.execute("""
+        DELETE FROM sessions
+        WHERE
+            userid = (SELECT userid FROM users WHERE username = ?)
+        """, (username,))
+
+
+def login_user(cursor, username):
+    """ create new session for user with username, return session key """
+    userid = get_userid(cursor, username)
+    key = token_urlsafe()
+    cursor.execute(
+        "REPLACE INTO sessions ('userid', 'key') VALUES (?, ?)",
+        (userid, key)
+    )
+    return key
 
 
 #########
 # MODEL #
 #########
-db = SqliteDatabase(None)
-
-
-class DM(Model):
-    class Meta:
-        database = db
-
-
-class User(DM):
-    username = CharField(unique=True, null=False)
-    password = CharField(null=False)
-    email = CharField(null=False)
-
-    @property
-    def session(self):
-        # peewee does not support one-to-one
-        try:
-            return self._session.get()
-        except DoesNotExist:
-            return None
-
-    @property
-    def logged_in(self):
-        if self.session:
-            # also make sure session has not expired
-            td = datetime.utcnow() - self.session.accessed
-            seconds_passed = td / timedelta(seconds=1)
-            if seconds_passed < COOKIE_EXPIRATION:
-                # reset timer
-                self.session.accessed = datetime.utcnow()
-                self.session.save()
-                return True
-        return False
-
-    def has_group(self, groups):
-        """ check whether is member of at least one group of groups """
-        return not not {g.name for g in self.groups}.intersection(groups)
-
-
-class UserSchema(Schema):
-    """marshmallow userschema used to validate user data"""
-    username = fields.Str(required=True,
-                          validate=validate.Length(min=1, max=30))
-    password = fields.Str(load_only=True, required=True,
-                          validate=validate.Length(min=1, max=100))
-    email = fields.Email()
-
-
-class Group(DM):
-    name = CharField(unique=True)
-    users = ManyToManyField(User, backref='groups')
-
-
-class Session(DM):
-    user = ForeignKeyField(User, primary_key=True, backref="_session")
-    key = CharField(default=uuid, unique=True)
-    accessed = DateTimeField(default=datetime.utcnow)
-
-
-class LoginError(Exception):
-    pass
-
-
 class AuthPlugin(object):
     ''' Session based access control plugin.'''
 
     name = 'auth'
     api = 2
 
-    def __init__(self, dbfile=':memory:', location=''):
-        self.dbfile = dbfile
-        self.location = location
-        self.login_page = None
-        self.logout_page = None
-        self.User = User
-        self.db = db
+    def __init__(self,):
+        self.app = None
+        self.conf = None
+        self.tpls = bottle.BaseTemplate.defaults
 
     def setup(self, app):
         self.app = app
-        db.init(self.dbfile)
-        # create_tables()  # fails silently
-
-    def _set_login_logout(self):
-        from_url = urllib.parse.quote_plus(request.url)
-        # lang = self.i18n.lang
-        self.login_page = LOGIN_URL.format(self.location, from_url)
-        self.logout_page = LOGOUT_URL.format(self.location, from_url)
-        # if lang:
-        #     lang = "&lang={}".format(lang)
-        #     self.login_page += lang 
-        #     # self.logout_page += lang
-        bottle.BaseTemplate.defaults['login_page'] = self.login_page
-        bottle.BaseTemplate.defaults['logout_page'] = self.logout_page
-
-    def apply(self, callback, context):
-        def wrapper(*args, **kwargs):
-            # connect to database
-            # db.connect() <= seems to lead to problems sometimes
-            db.connection()
-            # provide login/logout links to template
-            self._set_login_logout()
-            # check whether authorization is needed
-            groups = context.config.get('auth', None)
-            user = self._get_user()
-            if type(groups) == set and not user:
-                # need to authorize but not logged in: redirect to login
-                redirect(self.login_page, 302)
-            elif groups and not user.has_group(groups):
-                # logged in but not authorized
-                abort(403)
-            else:
-                # no authorization needed or user has authorization
-                request.user = user
-                bottle.BaseTemplate.defaults['user'] = user
-            # close db connection
-            if not db.is_closed():
-                db.close()
-            # render route as normal
-            return callback(*args, **kwargs)
-        return wrapper
-
-    def _get_user(self):
-        """return the currently logged in user associated with this request"""
-        session_key = request.get_cookie(COOKIE_KEY, secret=COOKIE_SECRET)
+        self.conf = app.config
+        # grab settings from app config
+        self.conf.setdefault('auth.dbfile', 'yaap.db')
         try:
-            session = Session.get(Session.key == session_key)
-        except Session.DoesNotExist:
-            print("No session for sess_id: %s" % session_key)
-        else:
-            # make sure session has not expired
-            if session.user.logged_in:
-                return session.user
+            with atomic(self.conf['auth.dbfile']) as cursor:
+                conf = get_conf(cursor)
+        except sqlite3.OperationalError:
+            raise ValueError("You need to init the database or tell the yaap "
+                             "plugin where to find your database by specifying"
+                             " auth.dbfile in the bottle app config")
+
+        self.conf.setdefault('auth.allow_registration',
+                             conf['allow_registration'])
+        self.conf.setdefault('auth.cookie_secret', conf['cookie_secret'])
+        self.conf.setdefault('auth.cookie_key', conf['cookie_key'])
+        self.conf.setdefault('auth.login', '/login/')
+        self.conf.setdefault('auth.logout', '/logout/')
+        self.conf.setdefault('auth.register', '/register/')
+        self.conf.setdefault('auth.reset', '/reset/')
+        self.conf.setdefault('auth.user', '/user/')
+
+        self.tpls['auth_user'] = self.conf['auth.user']
+
+    def get_user(self):
+        """return the currently logged in user associated with this request"""
+        session_key = request.get_cookie(
+            self.conf['auth.cookie_key'],
+            secret=self.conf['auth.cookie_secret']
+        )
+        if session_key:
+            with atomic(self.conf['auth.dbfile']) as cursor:
+                try:
+                    username, email = next(cursor.execute("""
+                        SELECT username, email
+                        FROM sessions
+                        INNER JOIN users ON users.userid = sessions.userid
+                        WHERE sessions.key = ?
+                        AND sessions.started <= (SELECT
+                                                 datetime('now', '+3 hour'))
+                        """, (session_key,)))
+                except StopIteration:
+                    return
+                else:
+                    return User(username, email, get_usergroups(cursor, 
+                                                                username))
 
     def login(self, username, password):
         """try logging in user, raise ValueError if unsuccessful"""
         # check whether user + pw match
-        try:
-            user = User.get(User.username == username)
-        except User.DoesNotExist:
-            print("Could not find username '%s' in DB." % username)
-        else:
-            if pwd_context.verify(password, user.password):
-                # update session
-                if user.session:
-                    user.session.delete_instance()
-                session = Session.create(user=user)
-                session.save()
-                # set response cookie
-                response.set_cookie(COOKIE_KEY, session.key,
-                                    secret=COOKIE_SECRET, path='/')
-                return
-        raise LoginError('Invalid username or password.')
-
-    def logout(self, user):
-        # remove session; null stuff
-        if user.session:
-            user.session.delete_instance()
-        request.user = None
-        bottle.BaseTemplate.defaults['user'] = None
-        # set response cookie
-        response.set_cookie(COOKIE_KEY, '', secret=COOKIE_SECRET, path='/')
-
-
-class AuthApp(bottle.Bottle):
-    """ base AuthApp to handle common auth app functionality """
-    def __init__(self, dbfile):
-        super().__init__(self)
-        # load and install plugin
-        self._auth = AuthPlugin(dbfile=dbfile)
-        self.install(self._auth)
-
-    def do_login(self, data):
-        data, validation_errors = UserSchema().load(data)
-        if not validation_errors:
-            # check the credentials 
-            self._auth.login(data['username'], data['password'])
-
-    def do_logout(self):
-        self._auth.logout(request.user)
-
-
-class JsonApp(AuthApp):
-    """ Auth app that receives json and answers 'restfully' """
-    def __init__(self, dbfile=':memory:', cors=None):
-        super().__init__(dbfile)
-        if cors:
-            self.install(cors)
-
-        @self.post('/login/')
-        def login():
-            try: 
-                self.do_login(request.json)
-            except LoginError:
-                response.status = 401
-                ok = False
+        with atomic(self.conf['auth.dbfile']) as cursor:
+            try:
+                pw_hash = next(cursor.execute(
+                    "SELECT password FROM users WHERE username = ?",
+                    (username,)))[0]
+            except StopIteration:
+                pass
             else:
-                ok = True
-            return {'ok': ok}
+                if pwd_context.verify(password, pw_hash):
+                    session_key = login_user(cursor, username)
+                    response.set_cookie(
+                        self.conf['auth.cookie_key'], session_key,
+                        secret=self.conf['auth.cookie_secret'], path='/'
+                    )
+                    return
+        raise ValueError('Invalid username or password.')
 
-        @self.post('/logout/', method=['POST'])
-        def logout():
-            self.do_logout()
+    def logout(self):
+        """ log out currently logged in user """
+        user = self.get_user()
+        if user:
+            with atomic(self.conf['auth.dbfile']) as cursor:
+                logout_user(cursor, user.username)
+        request.user = self.tpls['user'] = None
+        response.set_cookie(self.conf['auth.cookie_key'], '',
+                            secret=self.conf['auth.cookie_secret'], path='/')
 
+    def create(self, username, password, email):
+        """ create/register a new user """
+        pass
 
-class HtmlApp(AuthApp):
-    """ Auth app providing classic HTML form interface """
-    def __init__(self, dbfile=':memory:'):
-        super().__init__(dbfile)
+    def update(self, username, attr, value):
+        """ update user information """
+        pass
 
-        @self.route('/login/', method=['GET', 'POST'])
-        @view(TEMPLATES['login'])
-        def login():
-            error = None
-            if request.method == 'POST':
-                error = 'Invalid username or password.'
-                # validate formdata
-                try:
-                    self.do_login(request.forms)
-                except LoginError as e:
-                    # post request + error => render form with error shown
-                    error = str(e)
-                else:
-                    # redirect to from_url
-                    from_url = getattr(request.params, 'from_url') or '/user/'
-                    redirect(from_url)
-            # get request => render form
-            return {'error': error}
+    def delete(self, username, password, email):
+        """ delete user """
+        pass
 
-        @self.post('/logout/')
-        @view('base')
-        def logout():
-            self.do_logout()
-            # response 
-            from_url = getattr(request.params, 'from_url') or None
-            if from_url:
-                redirect(from_url)
-            return {'base': '<p>%s</p>' % 'Logged out successfully.',
-                    'title': 'Logged out'}
+    def apply(self, callback, context):
+        """ apply YAAP magic to the route """
+        def wrapper(*args, **kwargs):
+            request.user = self.tpls['user'] = self.get_user()
 
-        @self.get('/user/', auth=set())
-        @view(TEMPLATES['user'])
-        def user():
-            # implement edit username/email
-            return {}
+            # provide login/logout links to bottle templates
+            if request.params.get('from_url'):
+                url = request.params.get('from_url')
+            else:
+                url = request.url
+            from_url = '?from_url=%s' % quote_plus(url)
+            self.tpls['auth_login'] = self.conf['auth.login'] + from_url
+            self.tpls['auth_logout'] = self.conf['auth.logout'] + from_url
+            if self.conf['auth.allow_registration']:
+                self.tpls['auth_register'] = (self.conf['auth.register']
+                                              + from_url)
 
+            # check whether authorization is needed
+            groups = context.config.get('auth', None)
+            if groups is not None:
+                if not request.user:
+                    # need to authorize but not logged in: redirect to login
+                    redirect(self.tpls['auth_login'], 302)
+                elif groups and not groups.intersection(request.user.groups):
+                    # logged in but not authorized
+                    abort(403, 'You do not have sufficient access rights.')
 
-def create_tables():
-    db.create_tables([User, Session, Group, Group.users.get_through_model()])
-    # create langs 
-    users = [
-        {'username': 'pieter',
-         'password': pwd_context.hash('somepass'),
-         'email': 'pieter@luminix.fi'},
-        {'username': 'zeeland',
-         'password': pwd_context.hash('pass1'),
-         'email': 'zeeland@luminix.fi'},
-        {'username': 'hatala',
-         'password': pwd_context.hash('pass2'),
-         'email': 'hatala@luminix.fi'}
-    ]
-    with db.atomic():
-        User.insert_many(users).execute()
-    g = Group.create(name='admin')
-    g.users.add(User.get(username='pieter'))
-    g = Group.create(name='hatala|manager')
-    g.users.add(User.get(username='zeeland'))
-    g = Group.create(name='hatala|admin')
-    g.users.add(User.get(username='hatala'))
-    db.commit()
+            # render route as normal
+            return callback(*args, **kwargs)
+        return wrapper
 
 
-TEMPLATES = {
+def json_app(config):
+    """
+    Example json REST API app.
+
+    :config: dict
+    """
+    app = bottle.Bottle()
+    app.config.load_dict(config)
+    auth = AuthPlugin()
+    app.install(auth)
+
+    @app.post('/login/')
+    def login():
+        username = request.json['username']
+        password = request.json['password']
+        try: 
+            auth.login(username, password)
+        except ValueError:
+            response.status = 401
+
+    @app.post('/logout/', method=['POST'])
+    def logout():
+        auth.logout()
+
+    return app
+
+
+def html_app(config):
+    """
+    Example html app.
+
+    :config: dict
+    """
+    app = bottle.Bottle()
+    app.config.load_dict(config)
+    auth = AuthPlugin()
+    app.install(auth)
+
+    @app.get('/login/')
+    @view(TPL['base'])
+    def login_get():
+        if request.user:
+            return {'title': 'Sign in', 'body': template(TPL['logout']),
+                    'aside': template('You are already logged in as'
+                                      " '{{user.username}}'.")}
+        else:
+            return {'title': 'Sign in', 'body': template(TPL['login'])}
+
+    @app.post('/login/')
+    @view(TPL['base'])
+    def login_post():
+        try:
+            auth.login(request.forms.username, request.forms.password)
+        except ValueError as e:
+            # unsuccessful login => render form with error shown
+            return {'title': 'Sign in', 'error': True, 'aside': str(e),
+                    'body': template(TPL['login'])}
+        else:
+            # successful login => redirect to from_url
+            redirect(getattr(request.params, 'from_url',
+                             auth.conf['auth.user']))
+
+    @app.post('/logout/')
+    @view(TPL['base'])
+    def logout_post():
+        auth.logout()
+        # response 
+        from_url = getattr(request.params, 'from_url', None)
+        if from_url:
+            redirect(from_url)
+        return {'title': 'Logged out', 'aside': 'Logged out successfully.',
+                'body': template(TPL['login'])}
+
+    @app.get('/logout/')
+    @view(TPL['base'])
+    def logout_get():
+        if not request.user:
+            return {'title': 'You are currently not logged in.',
+                    'body': template(TPL['login'])}
+        return {'title': 'Confirm log out', 'body': template(TPL['logout'])}
+
+    @app.get('/user/', auth=set())
+    @view(TPL['base'])
+    def user():
+        # implement edit username/email
+        return {'title': 'Profile', 'body': template(TPL['user'])}
+
+    return app
+
+
+TPL = {
+    'base': """ 
+% setdefault('aside', None)
+% setdefault('error', False)
+<!DOCTYPE html>
+<html><head> <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<link rel="stylesheet" 
+href="https://unpkg.com/purecss@0.6.2/build/pure-min.css" 
+integrity="sha384-UQiGfs9ICog+LwheBSRCt1o5cbyKIHbwjWscjemyBMT9YCUMZffs6UqUTd0hObXD" 
+crossorigin="anonymous">
+<!--[if lte IE 8]>
+    <link rel="stylesheet" 
+    href="https://unpkg.com/purecss@0.6.2/build/grids-responsive-old-ie-min.css">
+<![endif]-->
+<!--[if gt IE 8]><!-->
+    <link rel="stylesheet" 
+    href="https://unpkg.com/purecss@0.6.2/build/grids-responsive-min.css">
+<!--<![endif]-->
+<style>
+body {max-width: 48em; margin: 1em auto 2em auto; background-color: #fff; 
+color: #777; line-height: 1.6;}
+h1, h2, h3, h4, h5, h6 {font-weight: bold; color: rgb(75, 75, 75);}
+h3 {font-size: 1.25em;}
+h4 {font-size: 1.125em;}
+a {color: #3b8bba; /* block-background-text-normal */ text-decoration: none;}
+dt {font-weight: bold;}
+dd {margin: 0 0 10px 0;}
+aside {
+    background: #4CAF50; /* same color as selected state on site menu */
+    margin: 1em 0;
+    padding: 0.3em 1em;
+    border-radius: 3px;
+    color: #fff;
+}
+    aside a, aside a:visited {
+        color: inherit;
+        border-bottom: 1px solid;
+    }
+.green {color: #4CAF50;}
+.yellow {color: yellow;}
+.bg-yellow {background-color: #ffd;}
+.red {color: rgb(233, 50, 45);}
+.bg-red {background-color: rgb(233, 50, 45);}
+</style>
+</head>
+<body><h1>{{title}}</h1>
+%if aside:
+  <aside {{!'class="bg-red"' if error else ''}}>{{aside}}</aside>
+%end
+{{!body}}</body></html>
+""",
     'user': """
-% title = 'User settings'
-%rebase('base.tpl', title=title)
  <dl>
   <dt>Username</dt>
   <dd>{{user.username}}</dd>
-  <dt>Logged in</dt>
-  <dd>{{user.logged_in}}</dd>
+  <dt>Email</dt>
+  <dd>{{user.email}}</dd>
 </dl> 
-<form class="pure-form pure-form-aligned" method="post" action="/logout/">
+<form class="pure-form pure-form-aligned" method="post"
+action="{{auth_logout}}">
     <fieldset>
         <input type="submit" class="pure-button pure-button-primary"
         value="log out"/> 
@@ -323,12 +548,8 @@ TEMPLATES = {
 </form>
 """,
     'login': """
-% title = 'Sign in'
-%rebase('base.tpl', title=title)
-%if error:
-  <aside>{{error}}</aside>
-%end
-<form class="pure-form pure-form-aligned" method="post">
+<form class="pure-form pure-form-aligned" method="post"
+action="{{auth_login}}">
 <fieldset>
     <legend>{{'Please sign in to continue'}}:</legend>
     <input name="username" type="text" placeholder="{{'Username'}}" value=""/>
@@ -336,27 +557,149 @@ TEMPLATES = {
     value=""/>
     <input type="submit" class="pure-button pure-button-primary"
     value="{{'Sign in'}}"/> 
-</fieldset>
+</fieldset></form>
+""",
+    'logout': """
+<form class="pure-form pure-form-aligned" method="post"
+action="{{auth_logout}}">
+    <fieldset>
+        <input type="submit" class="pure-button pure-button-primary"
+        value="log out"/> 
+    </fieldset>
 </form>
+""",
+    'demo': """
+<ul>
+<li><a href="/required/">Page with login required</a></li>
+<li><a href="/special/">Page restricted to special users</a></li>
+<li><a href="{{auth_user}}">User profile</a></li>
+<li><a href="{{auth_login}}">Login page</a></li>
+<li><a href="{{auth_logout}}">Logout page</a></li>
+</ul>
 """
 }
 
+try:
+    import click
+except ImportError:
+    def cli(*args, **kwargs):
+        print("Could not import click.")
+else:
+    @click.group()
+    @click.option('--dbfile', '-db', default='yaap.db', help="database file")
+    @click.pass_context
+    def cli(ctx, dbfile):
+        """ edit YAAP database """
+        ctx.obj = dbfile
 
-if __name__ == '__main__':
-    bottle.debug(True)
-    bottle.TEMPLATE_PATH.append("/home/pieter/code/base_tpl/")
-    # we use the htmlapp as the root and mount json to /api/
-    app = HtmlApp('test.db') 
-    # create_tables()
-    try:
-        from bottle_cors import CorsPlugin
-    except ModuleNotFoundError:
-        cors = None
-    else:
-        cors = CorsPlugin('/', origin='http://127.0.0.1:8000')
-    jsonapp = JsonApp('test.db', cors=cors)
-    app.mount('/api/', jsonapp)
-    # i18n
-    # i18n = I18NPlugin(langs=[('en', 'english'), ('fi', 'suomi')], user=None)
-    # auth
-    bottle.run(app, reloader=True, port="8082")
+    @cli.command('init')
+    @click.pass_obj
+    def cli_init(dbfile):
+        """ initialize a new YAAP sqlite database """
+        with atomic(dbfile) as cursor:
+            create_tables(cursor)
+
+    @cli.command('configure')
+    @click.argument('key')
+    @click.argument('value')
+    @click.pass_obj
+    def cli_configure(dbfile, key, value):
+        """ configure YAAP """
+        value = None if value == 'NULL' else value
+        with atomic(dbfile) as cursor:
+            configure(cursor, key, value)
+
+    @cli.command('create')
+    @click.argument('username')
+    @click.argument('email')
+    @click.option('--password', '-pw', default=lambda: token_urlsafe(8))
+    @click.option('--group', '-g', multiple=True)
+    @click.pass_obj
+    def cli_create(dbfile, username, email, password, group):
+        """ create a new user """
+        with atomic(dbfile) as cursor:
+            create_user(cursor, username=username, password=password, 
+                        email=email, groups=group)
+        click.echo(f"Created user {username!r} with password {password!r}")
+
+    @cli.command('remove')
+    @click.argument('username')
+    @click.pass_obj
+    def cli_remove(dbfile, username):
+        """ remove existing user """
+        with atomic(dbfile) as cursor:
+            remove_user(cursor, username=username)
+        click.echo(f"Deleted user {username!r}")
+
+    @cli.command('update')
+    @click.argument('username')
+    @click.argument('attr')
+    @click.argument('value', nargs=-1)
+    @click.pass_obj
+    def cli_update(dbfile, username, attr, value):
+        """ delete existing user """
+        if attr == 'groups':
+            value = set(value)
+        elif not value:
+            value = None
+        else:
+            value = value[0]
+
+        with atomic(dbfile) as cursor:
+            update_user(cursor, username, attr, value)
+        click.echo(f"Updated user {username!r}")
+
+    @cli.command('logout')
+    @click.argument('username')
+    @click.pass_obj
+    def cli_logout(dbfile, username):
+        """ log out user """
+        with atomic(dbfile) as cursor:
+            logout_user(cursor, username)
+        click.echo(f"User {username!r} is now logged out.")
+
+    @cli.group('show')
+    @click.pass_obj
+    def cli_show(dbfile):
+        """ show various information """
+        pass
+
+    @cli_show.command('settings')
+    @click.pass_obj
+    def cli_show_settings(dbfile):
+        """ show current settings """
+        with atomic(dbfile) as cursor:
+            print(get_conf(cursor))
+
+    @cli.command('demo')
+    @click.pass_obj
+    def cli_demo(dbfile):
+        """ run demo web app """
+        bottle.debug(True)
+        config = {'auth': {'dbfile': dbfile}}
+        app = html_app(config)
+
+        @app.get('/')
+        @view(TPL['base'])
+        def root():
+            return {'title': 'YAAP Demo APP',
+                    'aside': 'Click the links below to test out YAAP.',
+                    'body': template(TPL['demo'])}
+
+        @app.get('/required/', auth=set())
+        @view(TPL['base'])
+        def required():
+            return {'title': template('Hey {{user.username}}!'),
+                    'body': ('<p>Only logged in users allowed.</p>'
+                             '<p><a href="/">Go back</a></p>')}
+
+        @app.get('/special/', auth={'special'})
+        @view(TPL['base'])
+        def special():
+            return {'title': 'Shh!',
+                    'body': ('<p>Only special logged in users allowed.</p>'
+                             '<p><a href="/">Go back</a></p>')}
+
+        # jsonapp = json_app(config)
+        # app.mount('/api/', jsonapp)
+        bottle.run(app, reloader=True, port="8000")
