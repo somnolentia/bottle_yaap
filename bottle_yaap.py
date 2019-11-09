@@ -570,8 +570,10 @@ action="{{auth_logout}}">
 """,
     'demo': """
 <ul>
-<li><a href="/required/">Page with login required</a></li>
-<li><a href="/special/">Page restricted to special users</a></li>
+<li><a href="/required/">Page with login required</a>
+(visible to any logged in user)</li>
+<li><a href="/special/">Page restricted to special users</a>
+(visible to all users part of the 'special' group)</li>
 <li><a href="{{auth_user}}">User profile</a></li>
 <li><a href="{{auth_login}}">Login page</a></li>
 <li><a href="{{auth_logout}}">Logout page</a></li>
@@ -593,11 +595,19 @@ else:
         ctx.obj = dbfile
 
     @cli.command('init')
+    @click.option('--demo/--empty', default=False)
     @click.pass_obj
-    def cli_init(dbfile):
+    def cli_init(dbfile, demo):
         """ initialize a new YAAP sqlite database """
         with atomic(dbfile) as cursor:
             create_tables(cursor)
+            if demo:
+                create_user(cursor, 'tester', 'pw', 'tester@somnolentia.net')
+                create_user(cursor, 'special_tester', 'pw',
+                            'special_tester@somnolentia.net',
+                            groups=['special'])
+
+
 
     @cli.command('configure')
     @click.argument('key')
@@ -683,21 +693,27 @@ else:
         @view(TPL['base'])
         def root():
             return {'title': 'YAAP Demo APP',
-                    'aside': 'Click the links below to test out YAAP.',
+                    'aside': (
+                        "Login with username 'tester' or 'special_tester'"
+                        " and password 'pw'."
+                    ),
                     'body': template(TPL['demo'])}
 
         @app.get('/required/', auth=set())
         @view(TPL['base'])
         def required():
             return {'title': template('Hey {{user.username}}!'),
-                    'body': ('<p>Only logged in users allowed.</p>'
+                    'body': ('<p>You can see this page because you '
+                             'are logged in.</p>'
                              '<p><a href="/">Go back</a></p>')}
 
         @app.get('/special/', auth={'special'})
         @view(TPL['base'])
         def special():
             return {'title': 'Shh!',
-                    'body': ('<p>Only special logged in users allowed.</p>'
+                    'body': ('<p>You can see this page because '
+                             'you are logged in and belong to the '
+                             'special group.</p>'
                              '<p><a href="/">Go back</a></p>')}
 
         # jsonapp = json_app(config)
