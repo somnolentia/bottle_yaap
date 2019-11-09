@@ -40,6 +40,6 @@ setup(
         'cli': ['Click']
     },
     entry_points={
-        'console_scripts': ['yaap=bottle_yaap:cli'],
+        'console_scripts': ['bottle-yaap=bottle_yaap:cli'],
     },
 )
