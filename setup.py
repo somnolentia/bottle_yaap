@@ -2,11 +2,7 @@
 import os
 from setuptools import setup
 
-version = "1.0"
 project = 'bottle_yaap'
-author = "Pieter Vermeylen"
-author_email = "pieter@somnolentia.net"
-license = "MIT"
 
 
 def _read(fname):
@@ -16,32 +12,34 @@ def _read(fname):
         return ''
 
 
-def get_reqs():
-    with open('reqs.txt') as fp:
-        return fp.read().splitlines()
-
-
 setup(
     name=project,
-    version=version,
-    license=license,
+    version='1.0',
+    author='Pieter Vermeylen',
+    author_email='pieter@somnolenta.net',
     description="Yet Another Authorization Plugin (for Bottle)",
     long_description=_read('README.rst'),
-    platforms=('Any'),
-    keywords="",
-    author=author,
-    author_email=author_email,
     url=f'https://www.somnolentia.net/code/{project}',
+    keywords="",
+    license='MIT',
+    platforms=('Any'),
     classifiers=[
         'Intended Audience :: Developers',
         'Programming Language :: Python :: 3',
         'Topic :: Software Development :: Libraries :: Python Modules',
         'Topic :: Utilities',
     ],
-
     py_modules=[project],
-    install_requires=get_reqs(),
+    install_requires=[
+        'bottle',
+        'passlib',
+        'argon2-cffi',
+    ],
+    extras_require={
+        'dev': ['pytest'],
+        'cli': ['Click']
+    },
     entry_points={
         'console_scripts': ['yaap=bottle_yaap:cli'],
-    }
+    },
 )

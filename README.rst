@@ -5,6 +5,12 @@ Bottle YAAP
 
 Bottle YAAP
 
+Yet Another Authentication Plugin for bottlepy.org (session/cookie based).
+
+Bottle plugin created to test out working with SQLite without using an ORM.  
+Should be actually useful as well and easily adapted to work with your DB of 
+choice.
+
 .. _contents:
 
 .. contents::
@@ -23,7 +29,7 @@ Installation
 
 **Bottle YAAP** should be installed using pip: ::
 
-    pip install bottle-yaap
+    pip install git+https://github.com/somnolentia/bottle_yaap.git
 
 .. _usage:
 
@@ -37,7 +43,7 @@ Usage
 Configuration
 -------------
 
-PEEWEE_CONNECTION -- A connection string to database
+None at the moment.
 
 .. _bugtracker:
 

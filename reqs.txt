@@ -1,3 +1,18 @@
-argon2-cffi>=18.1.0
-bottle>=0.12.13
-passlib>=1.7.1
+Complete output from command git config --get-regexp remote\..*\.url:
+
+----------------------------------------
+argon2-cffi==18.3.0
+atomicwrites==1.2.1
+attrs==18.2.0
+bottle==0.12.13
+## !! Could not determine repository location
+bottle-yaap==1.0
+cffi==1.11.5
+Click==7.0
+more-itertools==4.3.0
+passlib==1.7.1
+pluggy==0.8.0
+py==1.7.0
+pycparser==2.19
+pytest==4.0.0
+six==1.11.0

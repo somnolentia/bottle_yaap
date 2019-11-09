@@ -16,7 +16,8 @@ def dbfile(tmpdir):
 
 def test_create_user(dbfile):
     with atomic(dbfile) as cursor:
-        create_user(cursor, username='pieter', password='123abc', email='p@i.org')
+        create_user(cursor, username='pieter', password='123abc', 
+                    email='p@i.org')
 
     with atomic(dbfile) as cursor:
         r = cursor.execute(
@@ -27,7 +28,8 @@ def test_create_user(dbfile):
 
 def test_create_usergroup(dbfile):
     with atomic(dbfile) as cursor:
-        create_user(cursor, username='pieter', password='123abc', email='p@i.org')
+        create_user(cursor, username='pieter', password='123abc', 
+                    email='p@i.org')
 
     with atomic(dbfile) as cursor:
         create_usergroup(cursor, 'pieter', 'testers')
@@ -37,8 +39,8 @@ def test_create_usergroup(dbfile):
 
 def test_create_user_with_groups(dbfile):
     with atomic(dbfile) as cursor:
-        create_user(cursor, username='pieter', password='123abc', email='p@i.org',
-                 groups=['abc', '123'])
+        create_user(cursor, username='pieter', password='123abc', 
+                    email='p@i.org', groups=['abc', '123'])
 
     with atomic(dbfile) as cursor:
         usergroups = cursor.execute("SELECT * FROM usergroups").fetchall()
@@ -48,7 +50,7 @@ def test_create_user_with_groups(dbfile):
 def test_remove_user(dbfile):
     with atomic(dbfile) as cursor:
         create_user(cursor, username='pieter', password='123abc', 
-                 email='p@i.org', groups=['testers', 'happy'])
+                    email='p@i.org', groups=['testers', 'happy'])
 
     with atomic(dbfile) as cursor:
         usergroups = cursor.execute("SELECT * FROM usergroups").fetchall()
@@ -65,8 +67,8 @@ def test_remove_user(dbfile):
 
 def test_remove_usergroup(dbfile):
     with atomic(dbfile) as cursor:
-        create_user(cursor, username='pieter', password='123abc', email='p@i.org',
-                 groups=['testers', 'happy'])
+        create_user(cursor, username='pieter', password='123abc', 
+                    email='p@i.org', groups=['testers', 'happy'])
 
     with atomic(dbfile) as cursor:
         usergroups = cursor.execute("SELECT * FROM usergroups").fetchall()
@@ -78,8 +80,8 @@ def test_remove_usergroup(dbfile):
 
 def test_update_user(dbfile):
     with atomic(dbfile) as cursor:
-        create_user(cursor, username='pieter', password='123abc', email='p@i.org',
-                 groups=['testers', 'happy'])
+        create_user(cursor, username='pieter', password='123abc', 
+                    email='p@i.org', groups=['testers', 'happy'])
 
     with atomic(dbfile) as cursor:
         # test setting username
@@ -100,5 +102,5 @@ def test_update_user(dbfile):
             update_user(cursor, 'tester', 'whatever', 'stuff')
 
         # test setting usergroups
-        update_user(cursor, 'tester', 'groups', ['a', 'b', 'c'])
-        assert get_usergroups(cursor, 'tester') == set(['a', 'b', 'c']) 
+        update_user(cursor, 'tester', 'groups', {'a', 'b', 'c'})
+        assert get_usergroups(cursor, 'tester') == {'a', 'b', 'c'} 
