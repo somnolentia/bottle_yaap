@@ -35,7 +35,7 @@ Install the optional requirements (cli or dev): ::
 
     pip install bottle_yaap cli
 
-**Note that Bottle Yaap has only been tested on Linux**
+**Note that Bottle YAAP has only been tested on Linux**
 
 .. _usage:
 
@@ -87,7 +87,7 @@ at https://github.com/somnolentia/bottle-yaap/issues
 Contributing
 ============
 
-Development of Bottle Peewee happens at: 
+Development of Bottle YAAP happens at: 
 https://github.com/somnolentia/bottle-yaap
 
 
