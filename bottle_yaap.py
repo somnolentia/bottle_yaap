@@ -575,8 +575,8 @@ action="{{auth_logout}}">
 <li><a href="/special/">Page restricted to special users</a>
 (visible to all users part of the 'special' group)</li>
 <li><a href="{{auth_user}}">User profile</a></li>
-<li><a href="{{auth_login}}">Login page</a></li>
-<li><a href="{{auth_logout}}">Logout page</a></li>
+<li><a href="{{auth_login}}">Login</a></li>
+<li><a href="{{auth_logout}}">Logout</a></li>
 </ul>
 """
 }
