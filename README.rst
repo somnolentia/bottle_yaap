@@ -80,7 +80,7 @@ Bug tracker
 
 If you have any suggestions, bug reports or
 annoyances please report them to the issue tracker
-at https://github.com/somnolentia/bottle-yaap/issues
+at https://github.com/somnolentia/bottle_yaap/issues
 
 .. _contributing:
 
