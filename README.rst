@@ -88,7 +88,7 @@ Contributing
 ============
 
 Development of Bottle YAAP happens at: 
-https://github.com/somnolentia/bottle-yaap
+https://github.com/somnolentia/bottle_yaap
 
 
 
