@@ -1,3 +1,7 @@
+parameters {
+    string(name: 'VERSION', defaultValue: '')
+}
+
 pipeline {
     agent any
     
