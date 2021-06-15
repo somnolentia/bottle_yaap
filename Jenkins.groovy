@@ -1,11 +1,10 @@
 
 pipeline {
     agent any
-    options([
-        parameters {
-            string(name: 'VERSION', defaultValue: ${params.Version}, length: 10)
-        }
-    ]) 
+
+    parameters {
+        string(name: 'VERSION', defaultValue: "${params.Version}", length: 10)
+    }
 
     stages {
 
