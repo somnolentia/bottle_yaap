@@ -1,7 +1,7 @@
 
 pipeline {
     agent any
-    properties([
+    options([
         parameters {
             string(name: 'VERSION', defaultValue: ${params.Version}, length: 10)
         }
