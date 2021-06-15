@@ -3,7 +3,11 @@ pipeline {
     agent any
 
     parameters {
-        string(name: 'VERSION', defaultValue: "${params.Version}")
+        persistentString(
+            name: 'VERSION',
+            defaultValue: 'Some value',
+            description: 'Provide the version number',
+            successfulOnly: false)
     }
 
     stages {
