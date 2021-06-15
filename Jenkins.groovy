@@ -1,10 +1,11 @@
-parameters {
-    string(name: 'VERSION', defaultValue: '')
-}
 
 pipeline {
     agent any
     
+    parameters {
+        string(name: 'VERSION', defaultValue: '')
+    }
+
     stages {
 
         stage ("run tests"){
@@ -15,7 +16,7 @@ pipeline {
 
         stage("build") {
             steps {
-                echo 'building docker image'
+                echo "building docker image version $VERSION"
             }
         }
 
