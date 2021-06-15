@@ -16,7 +16,7 @@ pipeline {
 
         stage("build") {
             steps {
-                echo "building docker image version $VERSION"
+                echo "building docker image version ${params.VERSION}"
             }
         }
 
