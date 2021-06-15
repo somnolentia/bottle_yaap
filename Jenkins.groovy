@@ -7,7 +7,12 @@ pipeline {
             name: 'VERSION',
             defaultValue: 'Some value',
             description: 'Provide the version number',
-            successfulOnly: false)
+            successfulOnly: false),
+        string(
+            name: 'NOPERSIST',
+            defaultValue: 'no idea',
+            description: 'Will not persist'
+        )
     }
 
     stages {
