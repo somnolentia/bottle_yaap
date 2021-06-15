@@ -1,10 +1,11 @@
 
 pipeline {
     agent any
-    
-    parameters {
-        string(name: 'VERSION')
-    }
+    properties([
+        parameters {
+            string(name: 'VERSION')
+        }
+    ]) 
 
     stages {
 
