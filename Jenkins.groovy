@@ -3,7 +3,7 @@ pipeline {
     agent any
     
     parameters {
-        string(name: 'VERSION', defaultValue: '')
+        string(name: 'VERSION')
     }
 
     stages {
