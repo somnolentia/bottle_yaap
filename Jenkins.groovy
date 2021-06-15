@@ -3,7 +3,7 @@ pipeline {
     agent any
     properties([
         parameters {
-            string(name: 'VERSION')
+            string(name: 'VERSION', length: 10)
         }
     ]) 
 
