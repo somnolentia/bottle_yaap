@@ -1,10 +1,11 @@
 //def somelibrary = evaluate readTrusted('JenkinsLibrary.groovy') 
-def params_a = [
-    string(name: 'VERSION')
+def PARAMS_A = [
+    string(name: 'VERSION'),
 ]
-def params_b = [
-    string(name: 'APP')
+def PARAMS_B = [
+    string(name: 'APP'),
 ]
+
 
 pipeline {
     agent any
@@ -26,8 +27,9 @@ pipeline {
         stage("setup parameters"){
             steps {
                 echo 'Combining common and webservice specific params'
+                echo "${PARAMS_A}"
                 script {
-                    setup_parameters();
+                    properties([parameters(PARAMS_A + PARAMS_B)]);
                 }
             }
         }
@@ -55,6 +57,5 @@ pipeline {
 }
 
 def setup_parameters(){
-    def combined_params = params_a + params_b
     properties([parameters(combined_params)])
 }
