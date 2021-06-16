@@ -12,8 +12,6 @@ def method_setup_parameters(){
 }
 pipeline {
     agent any
-
-    method_setup_parameters()
     //parameters {
     //    persistentString(
     //        name: 'VERSION',
@@ -28,6 +26,15 @@ pipeline {
     //}
 
     stages {
+
+        stage("setup parameters"){
+            steps {
+                echo 'Combining common and webservice specific params'
+                script {
+                    method_setup_parameters();
+                }
+            }
+        }
 
         stage ("run tests"){
           steps {
