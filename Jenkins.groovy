@@ -6,10 +6,6 @@ def params_b = [
     string(name: 'APP')
 ]
 
-def method_setup_parameters(){
-    def combined_params = params_a + params_b
-    properties([parameters(combined_params)])
-}
 pipeline {
     agent any
     //parameters {
@@ -31,7 +27,7 @@ pipeline {
             steps {
                 echo 'Combining common and webservice specific params'
                 script {
-                    method_setup_parameters();
+                    setup_parameters();
                 }
             }
         }
@@ -56,4 +52,9 @@ pipeline {
         }
 
     }
+}
+
+def setup_parameters(){
+    def combined_params = params_a + params_b
+    properties([parameters(combined_params)])
 }
