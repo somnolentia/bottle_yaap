@@ -17,7 +17,7 @@ pipeline {
         )
         choice(
             name: 'Boolean',
-            choices: ['Yes', 'No', 'Maybe']
+            choices: ['Yes', 'No', 'Maybe'],
             description: 'Do you want this?'
         )
     }
