@@ -9,30 +9,30 @@ def PARAMS_B = [
 
 pipeline {
     agent any
-    //parameters {
-    //    persistentString(
-    //        name: 'VERSION',
-    //        defaultValue: 'Some value',
-    //        description: 'Provide the version number',
-    //        successfulOnly: false)
-    //    string(
-    //        name: 'NOPERSIST',
-    //        defaultValue: 'no idea',
-    //        description: 'Will not persist'
-    //    )
-    //}
+    parameters {
+        string(
+            name: 'NOPERSIST',
+            defaultValue: 'no idea',
+            description: 'Will not persist'
+        )
+        choice(
+            name: 'Boolean',
+            choices: ['Yes', 'No', 'Maybe']
+            description: 'Do you want this?'
+        )
+    }
 
     stages {
 
-        stage("setup parameters"){
-            steps {
-                echo 'Combining common and webservice specific params'
-                echo "${PARAMS_A}"
-                script {
-                    properties([parameters(PARAMS_A + PARAMS_B)]);
-                }
-            }
-        }
+       // stage("setup parameters"){
+       //     steps {
+       //         echo 'Combining common and webservice specific params'
+       //         echo "${PARAMS_A}"
+       //         script {
+       //             properties([parameters(PARAMS_A + PARAMS_B)]);
+       //         }
+       //     }
+       // }
 
         stage ("run tests"){
           steps {
@@ -54,8 +54,4 @@ pipeline {
         }
 
     }
-}
-
-def setup_parameters(){
-    properties([parameters(combined_params)])
 }
